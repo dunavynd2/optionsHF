@@ -1,0 +1,25 @@
+
+services:
+  - type: worker
+    name: optionshf-trading-engine
+    env: python
+    region: oregon
+    plan: starter
+    buildCommand: pip install -r requirements.txt
+    startCommand: python src/trading_engine.py
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
+      - key: ALPACA_API_KEY
+        sync: false
+      - key: ALPACA_SECRET_KEY
+        sync: false
+      - key: ALPACA_BASE_URL
+        value: https://paper-api.alpaca.markets
+      - key: GOOGLE_CLOUD_PROJECT
+        sync: false
+      - key: BIGQUERY_DATASET
+        value: options_data
+      - key: GOOGLE_APPLICATION_CREDENTIALS
+        sync: false
+    autoDeploy: true

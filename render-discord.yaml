@@ -1,0 +1,22 @@
+
+services:
+  - type: web
+    name: optionshf-discord-webhook
+    env: python
+    region: oregon
+    plan: starter
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn src.discord_api:app
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
+      - key: DISCORD_WEBHOOK_URL
+        sync: false
+      - key: GOOGLE_CLOUD_PROJECT
+        sync: false
+      - key: BIGQUERY_DATASET
+        value: options_data
+      - key: GOOGLE_APPLICATION_CREDENTIALS
+        sync: false
+    healthCheckPath: /health
+    autoDeploy: true
