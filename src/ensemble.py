@@ -2,6 +2,7 @@
 """
 Model Ensemble System
 Combines predictions from all models with confidence scoring
+Updated to work with pre-trained models
 """
 
 import numpy as np
@@ -37,6 +38,7 @@ class ModelEnsemble:
         """
         self.models = {}
         self.use_automl = use_automl
+        self.model_load_status = {}
         
         # Initialize models
         self._initialize_models()
@@ -45,25 +47,58 @@ class ModelEnsemble:
         self._calculate_weights()
     
     def _initialize_models(self):
-        """Initialize all models"""
-        # Black-Scholes (always available)
+        """Initialize all models - load pre-trained models where available"""
+        # Black-Scholes (always available, no training needed)
         self.models['Black_Scholes'] = BlackScholesModel()
+        self.model_load_status['Black_Scholes'] = True
         
-        # Neural Networks (require training or pre-trained weights)
-        self.models['3_Layer_FFNN'] = ThreeLayerFFNN()
-        self.models['5_Layer_FFNN'] = FiveLayerFFNN()
+        # XGBoost models (load pre-trained)
+        try:
+            self.models['XGBoost_Max_Depth_10'] = XGBoostMaxDepth10()
+            self.model_load_status['XGBoost_Max_Depth_10'] = self.models['XGBoost_Max_Depth_10'].is_trained
+            if not self.model_load_status['XGBoost_Max_Depth_10']:
+                print("Warning: XGBoost Max Depth 10 model not loaded. Set XGBOOST_DEPTH_10_MODEL_PATH environment variable.")
+        except Exception as e:
+            print(f"XGBoost Max Depth 10 initialization failed: {e}")
+            self.model_load_status['XGBoost_Max_Depth_10'] = False
         
-        # XGBoost models (require training or pre-trained weights)
-        self.models['XGBoost_Max_Depth_5'] = XGBoostMaxDepth5()
-        self.models['XGBoost_Max_Depth_10'] = XGBoostMaxDepth10()
+        try:
+            self.models['XGBoost_Max_Depth_5'] = XGBoostMaxDepth5()
+            self.model_load_status['XGBoost_Max_Depth_5'] = self.models['XGBoost_Max_Depth_5'].is_trained
+            if not self.model_load_status['XGBoost_Max_Depth_5']:
+                print("Warning: XGBoost Max Depth 5 model not loaded. Set XGBOOST_DEPTH_5_MODEL_PATH environment variable.")
+        except Exception as e:
+            print(f"XGBoost Max Depth 5 initialization failed: {e}")
+            self.model_load_status['XGBoost_Max_Depth_5'] = False
+        
+        # Neural Networks (load pre-trained)
+        try:
+            self.models['3_Layer_FFNN'] = ThreeLayerFFNN()
+            self.model_load_status['3_Layer_FFNN'] = self.models['3_Layer_FFNN'].is_trained
+            if not self.model_load_status['3_Layer_FFNN']:
+                print("Warning: 3-Layer FFNN model not loaded. Set FFNN_3_LAYER_MODEL_PATH environment variable.")
+        except Exception as e:
+            print(f"3-Layer FFNN initialization failed: {e}")
+            self.model_load_status['3_Layer_FFNN'] = False
+        
+        try:
+            self.models['5_Layer_FFNN'] = FiveLayerFFNN()
+            self.model_load_status['5_Layer_FFNN'] = self.models['5_Layer_FFNN'].is_trained
+            if not self.model_load_status['5_Layer_FFNN']:
+                print("Warning: 5-Layer FFNN model not loaded. Set FFNN_5_LAYER_MODEL_PATH environment variable.")
+        except Exception as e:
+            print(f"5-Layer FFNN initialization failed: {e}")
+            self.model_load_status['5_Layer_FFNN'] = False
         
         # AutoML (optional, requires credentials)
         if self.use_automl:
             try:
                 self.models['AutoML_Regressor'] = AutoMLModel()
+                self.model_load_status['AutoML_Regressor'] = True
             except Exception as e:
                 print(f"AutoML initialization failed: {e}")
                 self.use_automl = False
+                self.model_load_status['AutoML_Regressor'] = False
     
     def _calculate_weights(self):
         """Calculate normalized weights based on inverse MAE"""
@@ -74,7 +109,44 @@ class ModelEnsemble:
         total = sum(inverse_weights.values())
         self.normalized_weights = {name: w / total for name, w in inverse_weights.items()}
     
-    def prepare_features_for_model(self, features_df: pd.DataFrame, model_name: str) -> np.ndarray:
+    def prepare_features_for_xgboost(self, features_df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Prepare features specifically for XGBoost models (27 features)
+        
+        Args:
+            features_df: DataFrame with raw features from BigQuery
+            
+        Returns:
+            DataFrame with 27 required features for XGBoost
+        """
+        # Map BigQuery features to XGBoost feature names
+        xgb_features = pd.DataFrame()
+        
+        # Direct mappings
+        xgb_features['strike_price'] = features_df['strike_price']
+        xgb_features['zero_coupon_rate'] = features_df.get('risk_free_rate', 0.05)
+        xgb_features['index_dividend_yields'] = features_df.get('dividend_yield', 0.0)
+        xgb_features['option_type'] = features_df.get('is_call', 1)  # 1 for call, 0 for put
+        xgb_features['time_to_maturity'] = features_df['time_to_expiration']
+        xgb_features['underlying_asset_current_price'] = features_df['underlying_price']
+        
+        # Implied volatility - use relative_spread as proxy or default
+        xgb_features['implied_volatility'] = features_df.get('relative_spread', 0.3) * 2
+        xgb_features['implied_volatility'] = xgb_features['implied_volatility'].clip(0.1, 1.0)
+        
+        # Lag features (past 20 days' closing prices)
+        # If not available in features_df, use current price as placeholder
+        for i in range(1, 21):
+            lag_col = f'lag_{i}'
+            if lag_col in features_df.columns:
+                xgb_features[lag_col] = features_df[lag_col]
+            else:
+                # Use current price as fallback (not ideal, but prevents errors)
+                xgb_features[lag_col] = features_df['underlying_price']
+        
+        return xgb_features
+    
+    def prepare_features_for_model(self, features_df: pd.DataFrame, model_name: str) -> pd.DataFrame:
         """
         Prepare features for specific model
         
@@ -83,28 +155,17 @@ class ModelEnsemble:
             model_name: Name of the model
             
         Returns:
-            Prepared feature array
+            Prepared feature DataFrame
         """
-        # Core features used by all models
-        feature_columns = [
-            'underlying_price',
-            'strike_price',
-            'time_to_expiration',
-            'risk_free_rate',
-            'dividend_yield',
-            'moneyness',
-            'is_call'
-        ]
-        
-        # Add model-specific features
         if model_name in ['XGBoost_Max_Depth_5', 'XGBoost_Max_Depth_10']:
-            # XGBoost can handle more features
-            feature_columns.extend(['volume', 'open_interest', 'relative_spread'])
+            return self.prepare_features_for_xgboost(features_df)
         
-        # Select available features
-        available_features = [col for col in feature_columns if col in features_df.columns]
+        # For neural networks, use the same features as XGBoost
+        if model_name in ['3_Layer_FFNN', '5_Layer_FFNN']:
+            return self.prepare_features_for_xgboost(features_df)
         
-        return features_df[available_features].values
+        # For other models, return as-is
+        return features_df
     
     def predict_single_model(self, model_name: str, features_df: pd.DataFrame) -> np.ndarray:
         """
@@ -121,6 +182,11 @@ class ModelEnsemble:
         if model is None:
             raise ValueError(f"Model {model_name} not found")
         
+        # Check if model is loaded
+        if not self.model_load_status.get(model_name, False):
+            print(f"Warning: {model_name} not loaded, returning zeros")
+            return np.zeros(len(features_df))
+        
         # Black-Scholes requires special handling
         if model_name == 'Black_Scholes':
             predictions = []
@@ -133,7 +199,7 @@ class ModelEnsemble:
                     'underlying_price': row['underlying_price'],
                     'strike_price': row['strike_price'],
                     'time_to_expiration': row['time_to_expiration'],
-                    'risk_free_rate': row['risk_free_rate'],
+                    'risk_free_rate': row.get('risk_free_rate', 0.05),
                     'volatility': volatility,
                     'dividend_yield': row.get('dividend_yield', 0.0),
                     'is_call': row.get('is_call', 1)
@@ -141,14 +207,15 @@ class ModelEnsemble:
                 predictions.append(model.predict(features_dict))
             return np.array(predictions)
         
-        # Other models
-        X = self.prepare_features_for_model(features_df, model_name)
+        # Prepare features for the specific model
+        prepared_features = self.prepare_features_for_model(features_df, model_name)
         
-        if not model.is_trained:
-            # Return zeros if model not trained (placeholder)
+        # Get predictions
+        try:
+            return model.predict(prepared_features)
+        except Exception as e:
+            print(f"Error predicting with {model_name}: {e}")
             return np.zeros(len(features_df))
-        
-        return model.predict(X)
     
     def predict_all_models(self, features_df: pd.DataFrame) -> Dict[str, np.ndarray]:
         """
@@ -195,9 +262,10 @@ class ModelEnsemble:
             total_weight = 0
             
             for model_name, predictions in all_predictions.items():
-                weight = self.normalized_weights.get(model_name, 0)
-                ensemble_pred += weight * predictions
-                total_weight += weight
+                if self.model_load_status.get(model_name, False):
+                    weight = self.normalized_weights.get(model_name, 0)
+                    ensemble_pred += weight * predictions
+                    total_weight += weight
             
             if total_weight > 0:
                 ensemble_pred /= total_weight
@@ -209,8 +277,13 @@ class ModelEnsemble:
         
         elif method == 'best_model':
             # Use only the best model (XGBoost Max Depth 10)
-            ensemble_pred = all_predictions.get('XGBoost_Max_Depth_10', 
-                                               np.zeros(len(features_df)))
+            if self.model_load_status.get('XGBoost_Max_Depth_10', False):
+                ensemble_pred = all_predictions.get('XGBoost_Max_Depth_10', 
+                                                   np.zeros(len(features_df)))
+            else:
+                print("Warning: Best model (XGBoost Max Depth 10) not loaded, using Black-Scholes")
+                ensemble_pred = all_predictions.get('Black_Scholes', 
+                                                   np.zeros(len(features_df)))
         
         else:
             raise ValueError(f"Unknown ensemble method: {method}")
@@ -222,6 +295,7 @@ class ModelEnsemble:
             'individual_predictions': all_predictions,
             'confidence_scores': confidence_scores,
             'method': method,
+            'model_load_status': self.model_load_status,
             'timestamp': datetime.now().isoformat()
         }
         
@@ -240,8 +314,15 @@ class ModelEnsemble:
         if not all_predictions:
             return np.array([0.0])
         
+        # Only use predictions from loaded models
+        loaded_predictions = [pred for name, pred in all_predictions.items() 
+                            if self.model_load_status.get(name, False)]
+        
+        if not loaded_predictions:
+            return np.array([0.0] * len(next(iter(all_predictions.values()))))
+        
         # Stack predictions
-        pred_array = np.array(list(all_predictions.values()))
+        pred_array = np.array(loaded_predictions)
         
         # Calculate coefficient of variation (lower = higher confidence)
         mean_pred = np.mean(pred_array, axis=0)
@@ -271,21 +352,35 @@ class ModelEnsemble:
         # Get individual model predictions
         individual_preds = metadata['individual_predictions']
         
-        # Calculate statistics
-        pred_array = np.array(list(individual_preds.values()))
+        # Calculate statistics (only from loaded models)
+        loaded_preds = [pred for name, pred in individual_preds.items() 
+                       if self.model_load_status.get(name, False)]
         
-        analysis = {
-            'ensemble_prediction': ensemble_pred.tolist(),
-            'individual_predictions': {k: v.tolist() for k, v in individual_preds.items()},
-            'confidence_scores': metadata['confidence_scores'].tolist(),
-            'statistics': {
+        if loaded_preds:
+            pred_array = np.array(loaded_preds)
+            statistics = {
                 'mean': np.mean(pred_array, axis=0).tolist(),
                 'median': np.median(pred_array, axis=0).tolist(),
                 'std': np.std(pred_array, axis=0).tolist(),
                 'min': np.min(pred_array, axis=0).tolist(),
                 'max': np.max(pred_array, axis=0).tolist()
-            },
+            }
+        else:
+            statistics = {
+                'mean': [0.0],
+                'median': [0.0],
+                'std': [0.0],
+                'min': [0.0],
+                'max': [0.0]
+            }
+        
+        analysis = {
+            'ensemble_prediction': ensemble_pred.tolist(),
+            'individual_predictions': {k: v.tolist() for k, v in individual_preds.items()},
+            'confidence_scores': metadata['confidence_scores'].tolist(),
+            'statistics': statistics,
             'model_weights': self.normalized_weights,
+            'model_load_status': self.model_load_status,
             'timestamp': metadata['timestamp']
         }
         

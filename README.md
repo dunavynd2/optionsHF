@@ -13,12 +13,34 @@ This system implements the research from "Pricing European Options with Google A
 
 ### Models Integrated
 
-1. **XGBoost (Max Depth 10)** - Best performing model (MAE: 0.8093)
+1. **XGBoost (Max Depth 10)** - Best performing model (MAE: 0.8093) ⭐
 2. **Google Cloud AutoML Regressor** (MAE: 1.0248)
 3. **XGBoost (Max Depth 5)** (MAE: 1.6362)
 4. **5-Layer Feed-Forward Neural Network** (MAE: 4.6374)
 5. **3-Layer Feed-Forward Neural Network** (MAE: 8.8075)
 6. **Black-Scholes Model** - Baseline (MAE: 8.0082)
+
+### Pre-trained Models
+
+⚠️ **Important:** This system uses **pre-trained models** that must be loaded from file paths. The models are NOT trained during deployment.
+
+**Required Model Files:**
+- `xgboost_depth_10.model` - Best model (download from [HuggingFace](https://huggingface.co/juan-esteban-berger/XGBoost_European_Options_Pricing_MD_10))
+- `xgboost_depth_5.model`
+- `ffnn_5_layer.h5` - 5-Layer Neural Network
+- `ffnn_3_layer.h5` - 3-Layer Neural Network
+
+**Model Input Features (27 total):**
+1. strike_price
+2. implied_volatility
+3. zero_coupon_rate
+4. index_dividend_yields
+5. option_type (1 for call, 0 for put)
+6. time_to_maturity
+7. underlying_asset_current_price
+8-27. lag_1 through lag_20 (past 20 days' closing prices)
+
+📖 **See [docs/MODEL_DEPLOYMENT.md](docs/MODEL_DEPLOYMENT.md) for detailed model deployment instructions.**
 
 ### Data Pipeline
 
@@ -38,118 +60,176 @@ This system implements the research from "Pricing European Options with Google A
 optionsHF/
 ├── src/
 │   ├── connectors/
-│   │   └── bigquery.py          # BigQuery data connector
+│   │   └── bigquery.py          # BigQuery data connector (fetches 27 features)
 │   ├── models/
 │   │   ├── black_scholes.py     # Black-Scholes implementation
-│   │   ├── neural_network.py    # 3-Layer & 5-Layer FFNN
-│   │   ├── xgboost_model.py     # XGBoost models
+│   │   ├── neural_network.py    # Pre-trained FFNN loaders
+│   │   ├── xgboost_model.py     # Pre-trained XGBoost loaders
 │   │   └── automl.py            # Google AutoML wrapper
 │   ├── ensemble.py              # Model ensemble system
 │   ├── discord_api.py           # Discord webhook API
 │   └── trading_engine.py        # Alpaca trading engine
+├── models/                      # Pre-trained model files directory
+│   ├── README.md                # Model files documentation
+│   ├── xgboost_depth_10.model   # (You need to add this)
+│   ├── xgboost_depth_5.model    # (You need to add this)
+│   ├── ffnn_5_layer.h5          # (You need to add this)
+│   └── ffnn_3_layer.h5          # (You need to add this)
+├── docs/
+│   └── MODEL_DEPLOYMENT.md      # Detailed deployment guide
 ├── render-discord.yaml          # Discord service config
 ├── render-trading.yaml          # Trading service config
 └── requirements.txt             # Python dependencies
 ```
 
-## 🚀 Deployment
+## 🚀 Quick Start
 
-### Two Separate Render Services
+### Prerequisites
 
-#### Service 1: Discord Webhook API
-```yaml
-# render-discord.yaml
-- Flask API for stock analysis
-- Endpoints: /health, /analyze
-- Sends analysis to Discord webhooks
-```
+1. **Pre-trained Model Files** - Download or obtain your trained models
+2. **Google Cloud Project** - With BigQuery access
+3. **Alpaca Account** - For trading (optional)
+4. **Discord Webhook** - For notifications (optional)
 
-**Environment Variables:**
-- `DISCORD_WEBHOOK_URL` - Discord webhook URL
-- `GOOGLE_CLOUD_PROJECT` - GCP project ID
-- `BIGQUERY_DATASET` - BigQuery dataset name
-- `GOOGLE_APPLICATION_CREDENTIALS` - Path to GCP credentials JSON
+### Local Development Setup
 
-#### Service 2: Alpaca Trading & Backtesting
-```yaml
-# render-trading.yaml
-- Background worker for trading
-- Alpaca integration
-- Backtesting engine
-```
+1. **Clone Repository:**
+   ```bash
+   git clone https://github.com/dunavynd2/optionsHF.git
+   cd optionsHF
+   ```
 
-**Environment Variables:**
-- `ALPACA_API_KEY` - Alpaca API key
-- `ALPACA_SECRET_KEY` - Alpaca secret key
-- `ALPACA_BASE_URL` - Alpaca API URL (paper/live)
-- `GOOGLE_CLOUD_PROJECT` - GCP project ID
-- `BIGQUERY_DATASET` - BigQuery dataset name
-- `GOOGLE_APPLICATION_CREDENTIALS` - Path to GCP credentials JSON
+2. **Create Virtual Environment:**
+   ```bash
+   python -m venv venv
+   source venv/bin/activate  # On Windows: venv\Scripts\activate
+   ```
+
+3. **Install Dependencies:**
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+4. **Set Up Model Files:**
+   ```bash
+   # Create models directory
+   mkdir -p models
+   
+   # Copy your pre-trained model files to models/
+   # - xgboost_depth_10.model
+   # - xgboost_depth_5.model
+   # - ffnn_5_layer.h5
+   # - ffnn_3_layer.h5
+   ```
+
+5. **Configure Environment Variables:**
+   ```bash
+   cp .env.example .env
+   # Edit .env with your credentials and model paths
+   ```
+
+   **Required Variables:**
+   ```bash
+   # Google Cloud
+   GOOGLE_CLOUD_PROJECT=your-project-id
+   BIGQUERY_DATASET=options_data
+   GOOGLE_APPLICATION_CREDENTIALS=path/to/credentials.json
+   
+   # Model Paths (Local)
+   XGBOOST_DEPTH_10_MODEL_PATH=./models/xgboost_depth_10.model
+   XGBOOST_DEPTH_5_MODEL_PATH=./models/xgboost_depth_5.model
+   FFNN_5_LAYER_MODEL_PATH=./models/ffnn_5_layer.h5
+   FFNN_3_LAYER_MODEL_PATH=./models/ffnn_3_layer.h5
+   
+   # Optional
+   DISCORD_WEBHOOK_URL=your-webhook-url
+   ALPACA_API_KEY=your-api-key
+   ALPACA_SECRET_KEY=your-secret-key
+   ```
+
+6. **Run Services:**
+   ```bash
+   # Discord API
+   python src/discord_api.py
+   
+   # Trading Engine
+   python src/trading_engine.py
+   ```
 
 ## 📊 Model Performance
 
 Based on research results:
 
-| Model | MAE | MAPE | Training Time |
-|-------|-----|------|---------------|
-| XGBoost (Depth 10) | 0.8093 | 42.23% | 1917s |
-| AutoML | 1.0248 | 42.73% | 174420s |
-| XGBoost (Depth 5) | 1.6362 | 187.02% | 971s |
-| 5-Layer FFNN | 4.6374 | 243.90% | 3288s |
-| 3-Layer FFNN | 8.8075 | 323.77% | 3066s |
-| Black-Scholes | 8.0082 | 63.88% | N/A |
+| Model | MAE | MAPE | Status |
+|-------|-----|------|--------|
+| XGBoost (Depth 10) ⭐ | 0.8093 | 42.23% | Pre-trained |
+| AutoML | 1.0248 | 42.73% | Optional |
+| XGBoost (Depth 5) | 1.6362 | 187.02% | Pre-trained |
+| 5-Layer FFNN | 4.6374 | 243.90% | Pre-trained |
+| 3-Layer FFNN | 8.8075 | 323.77% | Pre-trained |
+| Black-Scholes | 8.0082 | 63.88% | Built-in |
 
-## 🔧 Setup Instructions
+## 🔧 Render Deployment
 
-### 1. Google Cloud Setup
+### Step 1: Prepare Model Files
+
+Choose one of these methods:
+
+**Method 1: Persistent Disk (Recommended)**
+1. Create a persistent disk in Render (1 GB)
+2. Mount at `/opt/render/project/src/models`
+3. Upload model files via Render Shell
+
+**Method 2: Google Cloud Storage**
+1. Upload models to GCS bucket
+2. Download in build command
+
+**Method 3: Include in Repository** (only for small models <100 MB)
+
+📖 **See [docs/MODEL_DEPLOYMENT.md](docs/MODEL_DEPLOYMENT.md) for detailed instructions.**
+
+### Step 2: Configure Environment Variables
+
+In Render dashboard, set:
 
 ```bash
-# Create BigQuery dataset
-bq mk --dataset --location=US options_data
+# Model Paths (Render)
+XGBOOST_DEPTH_10_MODEL_PATH=/opt/render/project/src/models/xgboost_depth_10.model
+XGBOOST_DEPTH_5_MODEL_PATH=/opt/render/project/src/models/xgboost_depth_5.model
+FFNN_5_LAYER_MODEL_PATH=/opt/render/project/src/models/ffnn_5_layer.h5
+FFNN_3_LAYER_MODEL_PATH=/opt/render/project/src/models/ffnn_3_layer.h5
 
-# Load data into BigQuery tables
-bq load --source_format=CSV options_data.Security_Prices gs://your-bucket/security_prices.csv
-bq load --source_format=CSV options_data.Options_Prices gs://your-bucket/options_prices.csv
-# ... (load other tables)
+# Google Cloud
+GOOGLE_CLOUD_PROJECT=your-project-id
+BIGQUERY_DATASET=options_data
+GOOGLE_APPLICATION_CREDENTIALS=/path/to/credentials.json
 
-# Create service account
-gcloud iam service-accounts create optionshf-service \
-    --display-name="OptionsHF Service Account"
-
-# Grant permissions
-gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
-    --member="serviceAccount:optionshf-service@YOUR_PROJECT_ID.iam.gserviceaccount.com" \
-    --role="roles/bigquery.dataViewer"
-
-# Download credentials
-gcloud iam service-accounts keys create credentials.json \
-    --iam-account=optionshf-service@YOUR_PROJECT_ID.iam.gserviceaccount.com
+# Optional
+DISCORD_WEBHOOK_URL=your-webhook-url
+ALPACA_API_KEY=your-api-key
+ALPACA_SECRET_KEY=your-secret-key
 ```
 
-### 2. Alpaca Setup
-
-1. Sign up at https://alpaca.markets
-2. Get API keys from dashboard
-3. Use paper trading URL for testing: `https://paper-api.alpaca.markets`
-
-### 3. Discord Setup
-
-1. Create Discord webhook in your server
-2. Copy webhook URL
-3. Add to environment variables
-
-### 4. Deploy to Render
+### Step 3: Deploy Services
 
 **Discord Service:**
 ```bash
-# Deploy from GitHub
 render deploy --service-type=web --config=render-discord.yaml
 ```
 
 **Trading Service:**
 ```bash
-# Deploy from GitHub
 render deploy --service-type=worker --config=render-trading.yaml
+```
+
+### Step 4: Verify Deployment
+
+Check Render logs for:
+```
+Successfully loaded pre-trained model from: /opt/render/project/src/models/xgboost_depth_10.model
+Successfully loaded pre-trained model from: /opt/render/project/src/models/xgboost_depth_5.model
+Successfully loaded pre-trained model from: /opt/render/project/src/models/ffnn_5_layer.h5
+Successfully loaded pre-trained model from: /opt/render/project/src/models/ffnn_3_layer.h5
 ```
 
 ## 📡 API Usage
@@ -178,168 +258,95 @@ Content-Type: application/json
     "ensemble_prediction": [245.67],
     "individual_predictions": {
       "XGBoost_Max_Depth_10": [246.12],
-      "AutoML_Regressor": [245.89],
       "XGBoost_Max_Depth_5": [244.56],
       "5_Layer_FFNN": [243.21],
       "3_Layer_FFNN": [241.87],
       "Black_Scholes": [247.34]
     },
     "confidence_scores": [0.85],
-    "statistics": {
-      "mean": [245.50],
-      "median": [245.67],
-      "std": [1.89]
+    "model_load_status": {
+      "XGBoost_Max_Depth_10": true,
+      "XGBoost_Max_Depth_5": true,
+      "5_Layer_FFNN": true,
+      "3_Layer_FFNN": true,
+      "Black_Scholes": true
     }
-  },
-  "discord_sent": true
+  }
 }
 ```
 
 ### Trading Engine
 
-**Analyze and Trade:**
 ```python
 from src.trading_engine import TradingEngine
 
 engine = TradingEngine()
 
-# Analyze option
+# Analyze and trade
 result = engine.analyze_and_trade(
     symbol='AAPL',
     quantity=1,
     confidence_threshold=0.7
 )
-
-print(result)
-# {
-#   'symbol': 'AAPL',
-#   'prediction': 245.67,
-#   'confidence': 0.85,
-#   'trade_signal': 'BUY',
-#   'message': 'High confidence (85%) - Trade signal generated'
-# }
 ```
 
-**Backtest Strategy:**
-```python
-from datetime import datetime, timedelta
-
-end_date = datetime.now()
-start_date = end_date - timedelta(days=30)
-
-results = engine.backtest(
-    symbol='AAPL',
-    start_date=start_date,
-    end_date=end_date,
-    initial_capital=10000.0
-)
-
-print(results)
-```
-
-## 🧪 Local Development
+## 🧪 Testing
 
 ```bash
-# Clone repository
-git clone https://github.com/dunavynd2/optionsHF.git
-cd optionsHF
+# Run basic tests
+python tests/test_basic.py
 
-# Create virtual environment
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-
-# Install dependencies
-pip install -r requirements.txt
-
-# Set environment variables
-export GOOGLE_CLOUD_PROJECT="your-project-id"
-export BIGQUERY_DATASET="options_data"
-export GOOGLE_APPLICATION_CREDENTIALS="path/to/credentials.json"
-export DISCORD_WEBHOOK_URL="your-webhook-url"
-export ALPACA_API_KEY="your-api-key"
-export ALPACA_SECRET_KEY="your-secret-key"
-
-# Run Discord API
-python src/discord_api.py
-
-# Run trading engine
-python src/trading_engine.py
+# Test model loading
+python -c "from src.ensemble import ModelEnsemble; e = ModelEnsemble(); print(e.model_load_status)"
 ```
 
-## 🔬 Model Training
+## 📚 Documentation
 
-To train models with your own data:
-
-```python
-from src.models.xgboost_model import XGBoostMaxDepth10
-from src.models.neural_network import FiveLayerFFNN
-import pandas as pd
-
-# Load training data
-train_df = pd.read_csv('training_data.csv')
-X_train = train_df[feature_columns].values
-y_train = train_df['option_price'].values
-
-# Train XGBoost
-xgb_model = XGBoostMaxDepth10()
-xgb_model.train(X_train, y_train)
-xgb_model.save('models/xgboost_depth10.joblib')
-
-# Train Neural Network
-nn_model = FiveLayerFFNN()
-nn_model.train(X_train, y_train, epochs=100)
-nn_model.save('models/5layer_ffnn.h5')
-```
-
-## 📈 Feature Engineering
-
-The system uses the following features for prediction:
-
-**Core Features:**
-- `underlying_price` - Current stock price
-- `strike_price` - Option strike price
-- `time_to_expiration` - Time to expiration (years)
-- `risk_free_rate` - Risk-free interest rate
-- `dividend_yield` - Dividend yield
-- `moneyness` - S/K ratio
-- `is_call` - Option type (1=call, 0=put)
-
-**Additional Features (XGBoost):**
-- `volume` - Trading volume
-- `open_interest` - Open interest
-- `relative_spread` - Bid-ask spread / mid price
-
-## 🎯 Ensemble Strategy
-
-The ensemble combines predictions using weighted averaging based on model performance:
-
-```python
-# Weights based on inverse MAE
-weights = {
-    'XGBoost_Max_Depth_10': 0.8093,    # Highest weight
-    'AutoML_Regressor': 1.0248,
-    'XGBoost_Max_Depth_5': 1.6362,
-    '5_Layer_FFNN': 4.6374,
-    '3_Layer_FFNN': 8.8075,
-    'Black_Scholes': 8.0082
-}
-
-# Normalized weights sum to 1.0
-ensemble_prediction = Σ(weight_i × prediction_i) / Σ(weight_i)
-```
-
-**Confidence Scoring:**
-- Based on model agreement (coefficient of variation)
-- Higher agreement = higher confidence
-- Range: 0.0 to 1.0
+- **[MODEL_DEPLOYMENT.md](docs/MODEL_DEPLOYMENT.md)** - Comprehensive model deployment guide
+- **[models/README.md](models/README.md)** - Model files documentation
+- **[.env.example](.env.example)** - Environment variables template
 
 ## 🔐 Security Notes
 
-- Never commit credentials to Git
+- Never commit credentials or model files to Git
 - Use environment variables for all secrets
 - Enable 2FA on all service accounts
 - Use paper trading for testing
 - Monitor API usage and costs
+- Encrypt sensitive model files
+
+## 🐛 Troubleshooting
+
+### Model Not Loading
+
+**Error:** `FileNotFoundError: Model file not found`
+
+**Solutions:**
+1. Verify file exists at specified path
+2. Check environment variable is set correctly
+3. Ensure file permissions allow reading
+4. For Render: Verify persistent disk is mounted
+
+### Missing Features
+
+**Error:** `ValueError: Missing required features`
+
+**Solutions:**
+1. Verify BigQuery connector is fetching all 27 features
+2. Check lag features are being generated
+3. Review feature engineering pipeline
+
+### Prediction Errors
+
+**Error:** `Error predicting with XGBoost_Max_Depth_10`
+
+**Solutions:**
+1. Check input data format (must be pandas DataFrame)
+2. Verify all 27 features are present
+3. Ensure feature order matches model expectations
+4. Check for NaN or infinite values
+
+📖 **See [docs/MODEL_DEPLOYMENT.md](docs/MODEL_DEPLOYMENT.md) for more troubleshooting tips.**
 
 ## 📚 References
 
@@ -359,3 +366,13 @@ This project is based on research by Juan Esteban Berger, University of Notre Da
 ---
 
 **⚠️ Disclaimer:** This system is for educational and research purposes. Options trading involves significant risk. Always consult with a financial advisor before making investment decisions.
+
+---
+
+**Key Updates in This Version:**
+- ✅ Pre-trained model loading (no training during deployment)
+- ✅ 27 feature support (including lag features)
+- ✅ Comprehensive model deployment documentation
+- ✅ Render deployment with persistent disk support
+- ✅ Error handling for missing models
+- ✅ Model load status tracking

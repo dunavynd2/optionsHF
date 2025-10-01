@@ -2,6 +2,7 @@
 """
 BigQuery Data Connector
 Fetches options data from BigQuery tables based on the Entity Relationship Diagram
+Updated to fetch all 27 features required by XGBoost models
 """
 
 import os
@@ -70,6 +71,47 @@ class BigQueryConnector:
                 bigquery.ScalarQueryParameter("symbol", "STRING", symbol),
                 bigquery.ScalarQueryParameter("start_date", "DATE", start_date.date()),
                 bigquery.ScalarQueryParameter("end_date", "DATE", end_date.date()),
+            ]
+        )
+        
+        return self.client.query(query, job_config=job_config).to_dataframe()
+    
+    def get_lag_features(self, symbol: str, reference_date: datetime, num_lags: int = 20) -> pd.DataFrame:
+        """
+        Fetch lag features (past N days' closing prices) for a given symbol
+        
+        Args:
+            symbol: Stock symbol
+            reference_date: Reference date
+            num_lags: Number of lag days to fetch (default: 20)
+            
+        Returns:
+            DataFrame with lag features
+        """
+        # Fetch prices for the past num_lags days before reference_date
+        start_date = reference_date - timedelta(days=num_lags + 10)  # Extra buffer for weekends
+        
+        query = f"""
+        SELECT 
+            sp.date,
+            sp.close_price,
+            snh.symbol
+        FROM `{self.project_id}.{self.dataset_id}.Security_Prices` sp
+        JOIN `{self.project_id}.{self.dataset_id}.Security_Name_History` snh
+            ON sp.security_id = snh.security_id
+        WHERE snh.symbol = @symbol
+            AND sp.date < @reference_date
+            AND sp.date >= @start_date
+        ORDER BY sp.date DESC
+        LIMIT @num_lags
+        """
+        
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter("symbol", "STRING", symbol),
+                bigquery.ScalarQueryParameter("reference_date", "DATE", reference_date.date()),
+                bigquery.ScalarQueryParameter("start_date", "DATE", start_date.date()),
+                bigquery.ScalarQueryParameter("num_lags", "INT64", num_lags),
             ]
         )
         
@@ -173,15 +215,17 @@ class BigQueryConnector:
         
         return self.client.query(query, job_config=job_config).to_dataframe()
     
-    def prepare_features(self, options_df: pd.DataFrame) -> pd.DataFrame:
+    def prepare_features(self, options_df: pd.DataFrame, symbol: str) -> pd.DataFrame:
         """
         Prepare features for model prediction based on the research paper
+        Includes all 27 features required by XGBoost models
         
         Args:
             options_df: Raw options data from BigQuery
+            symbol: Stock symbol (for fetching lag features)
             
         Returns:
-            DataFrame with engineered features
+            DataFrame with engineered features (27 features total)
         """
         df = options_df.copy()
         
@@ -206,5 +250,26 @@ class BigQueryConnector:
         # Calculate implied volatility proxy using bid-ask spread
         df['bid_ask_spread'] = df['ask_price'] - df['bid_price']
         df['relative_spread'] = df['bid_ask_spread'] / df['mid_price']
+        
+        # Fetch lag features (past 20 days' closing prices)
+        # For each unique date in the options data, fetch lag features
+        unique_dates = df['date'].unique()
+        
+        for date in unique_dates:
+            lag_df = self.get_lag_features(symbol, pd.to_datetime(date), num_lags=20)
+            
+            if len(lag_df) > 0:
+                # Create lag columns
+                for i, (_, row) in enumerate(lag_df.iterrows(), start=1):
+                    if i <= 20:
+                        df.loc[df['date'] == date, f'lag_{i}'] = row['close_price']
+        
+        # Fill any missing lag features with current price (fallback)
+        for i in range(1, 21):
+            lag_col = f'lag_{i}'
+            if lag_col not in df.columns:
+                df[lag_col] = df['underlying_price']
+            else:
+                df[lag_col] = df[lag_col].fillna(df['underlying_price'])
         
         return df
